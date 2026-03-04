@@ -609,27 +609,11 @@
     }
 
     function getCleanTitle(s) {
-      let title = s.t;
-      
-      // AGGRESSIVE CHOP: If the title looks like "Singer, Singer - Real Title", 
-      // this splits it at the hyphen and ONLY keeps the actual title at the end!
-      if (title.includes('-')) {
-        let parts = title.split('-');
-        title = parts[parts.length - 1]; 
-      }
-      
-      return title.replace(/\(.*\)|\[.*\]|\{.*\}/g, '') // Deletes (From Monica Darling)
-                  .replace(/lyrical|audio|video|official/gi, '') // Deletes junk words
-                  .replace(/_/g, ' ') // Fixes underscores
-                  .replace(/^[-\s]+|[-\s]+$/g, '') // Cleans up leftover spaces or dashes
-                  .trim();
-    }
-
-    function getPrimaryArtist(artistStr) {
-      if (!artistStr) return "";
-      // AGGRESSIVE CHOP: Splits at the first comma, &, |, or the words "and", "ft", "feat"
-      // It completely ignores everyone except the very first singer.
-      return artistStr.split(/[,&|\-]|feat\.?|ft\.?|\band\b/i)[0].trim();
+      // The new .replace(/_/g, ' ') translates underscores into spaces behind the scenes!
+      return s.t.replace(/\(.*\)|\[.*\]|\{.*\}/g, '')
+                .replace(/lyrical|audio|video|official/gi, '')
+                .replace(/_/g, ' ') 
+                .trim();
     }
 
     function toggleEditMode() {
@@ -848,119 +832,99 @@ function toggleLyrics() {
   }
 }
 
-  // --- FETCH LYRICS ---
-  async function getLyrics(s) {
-    if (!lyricsEnabled) {
-      lyrics = [];
-      lContent.innerHTML = `<div style="padding: 20px; color: var(--dim); text-align: center; margin-top: 50%; transform: translateY(-50%); font-size: 0.95rem;">Lyrics are disabled to save power.</div>`;
+// --- FETCH LYRICS ---
+async function getLyrics(s) {
+  // FIX: Removed the local variables that overwrote lContent and lView.
+  // We will strictly use the global lContent and lView variables defined at the top of your file.
+
+  if (!lyricsEnabled) {
+    lyrics = [];
+    lContent.innerHTML = `<div style="padding: 20px; color: var(--dim); text-align: center; margin-top: 50%; transform: translateY(-50%); font-size: 0.95rem;">Lyrics are disabled to save power.</div>`;
+    return;
+  }
+
+  try {
+    const cSongId = s.id || s.p; 
+    
+    lyrics = []; 
+    lyrIdx = -1;
+    
+    if(localStorage.getItem('noLyr_' + cSongId)) {
+      lContent.innerHTML = '<p class="lyric-line" style="opacity: 1; filter:blur(0)">Lyrics disabled for this track.</p>'; 
       return;
     }
-
-    try {
-      const cSongId = s.id || s.p; 
-      lyrics = []; 
-      lyrIdx = -1;
-      
-      if(localStorage.getItem('noLyr_' + cSongId)) {
-        lContent.innerHTML = '<p class="lyric-line" style="opacity: 1; filter:blur(0)">Lyrics disabled for this track.</p>'; 
-        return;
+    
+    let cleanTitle = getCleanTitle(s);
+    let lDir, lPath;
+    
+    // 1. Local Read
+    if (!s.isOnline) {
+      lDir = path.join(path.dirname(s.p), 'Lyrics');
+      lPath = path.join(lDir, s.a + ' - ' + cleanTitle + '.lrc');
+      if(fs.existsSync(lPath)) { 
+          show(fs.readFileSync(lPath, 'utf8')); 
+          return; 
       }
-      
-      let cleanTitle = getCleanTitle(s);
-      let lDir, lPath;
-      
-      // 1. Local Read
-      if (!s.isOnline) {
-        lDir = path.join(path.dirname(s.p), 'Lyrics');
-        lPath = path.join(lDir, s.a + ' - ' + cleanTitle + '.lrc');
-        if(fs.existsSync(lPath)) { 
-            show(fs.readFileSync(lPath, 'utf8')); 
-            return; 
-        }
-      } else {
-        const savedCustom = localStorage.getItem('lyric_custom_' + cSongId);
-        if (savedCustom) { show(savedCustom); return; }
-      }
+    } else {
+      const savedCustom = localStorage.getItem('lyric_custom_' + cSongId);
+      if (savedCustom) { show(savedCustom); return; }
+    }
 
-      if(localStorage.getItem('apiEmpty_' + cSongId)) {
-        lContent.innerHTML = '<p class="lyric-line" style="opacity: 1; filter:blur(0)">No lyrics in database.</p>'; return;
-      }
+    if(localStorage.getItem('apiEmpty_' + cSongId)) {
+       lContent.innerHTML = '<p class="lyric-line" style="opacity: 1; filter:blur(0)">No lyrics in database.</p>'; return;
+    }
 
-      lContent.innerHTML = '<p class="lyric-line" style="opacity: 1; filter: blur(0px);">Searching the database...</p>';
-      
-      const headers = { 'User-Agent': 'ProMediaPlayer/1.0.0 (https://github.com/mahitmass/music_with_LYRICS)' };
-      
-      // Set up our smart variables
-      const fullTitle = s.t;
-      const fullArtist = s.a || '';
-      const primaryArtist = getPrimaryArtist(fullArtist);
-      
-      let data = null;
-      let finalLyrics = null;
+    lContent.innerHTML = '<p class="lyric-line" style="opacity: 1; filter: blur(0px);">Searching the database...</p>';
+    
+    const headers = { 'User-Agent': 'ProMediaPlayer/1.0.0 (https://github.com/mahitmass/music_with_LYRICS)' };
+    let res = await fetch(`https://lrclib.net/api/search?track_name=${encodeURIComponent(cleanTitle)}&artist_name=${encodeURIComponent(s.a || '')}`, { headers });
+    
+    if (res.status === 429 || res.status === 403) {
+      lContent.innerHTML = '<p class="lyric-line" style="opacity:1; color:#ff4c4c;">API Cooldown. Waiting...</p>'; return;
+    }
+    
+    if (!res.ok) throw new Error(`API returned status ${res.status}`);
 
-      // ATTEMPT 1: Exact Match (Raw Metadata)
-      let res = await fetch(`https://lrclib.net/api/search?track_name=${encodeURIComponent(fullTitle)}&artist_name=${encodeURIComponent(fullArtist)}`, { headers });
-      if (res.status === 429 || res.status === 403) {
-        lContent.innerHTML = '<p class="lyric-line" style="opacity:1; color:#ff4c4c;">API Cooldown. Waiting...</p>'; return;
-      }
-      if (res.ok) {
-        data = await res.json();
-        if (data && data[0]?.syncedLyrics) finalLyrics = data[0].syncedLyrics;
-      }
+    let data = await res.json();
+    if(!data || !data[0]?.syncedLyrics) {
+      res = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent((s.a || '') + ' ' + cleanTitle)}`, { headers });
+      if(res.ok) data = await res.json();
+    }
+    
+    let finalLyrics = data && data[0] ? data[0].syncedLyrics : null;
 
-      // ATTEMPT 2: Cleaned Match (Primary Artist + Clean Title without brackets)
-      if (!finalLyrics) {
-        res = await fetch(`https://lrclib.net/api/search?track_name=${encodeURIComponent(cleanTitle)}&artist_name=${encodeURIComponent(primaryArtist)}`, { headers });
-        if (res.ok) {
-          data = await res.json();
-          if (data && data[0]?.syncedLyrics) finalLyrics = data[0].syncedLyrics;
-        }
-      }
-
-      // ATTEMPT 3: Broad Fuzzy Search (Smooshed together)
-      if (!finalLyrics) {
-        res = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(primaryArtist + ' ' + cleanTitle)}`, { headers });
-        if (res.ok) {
-          data = await res.json();
-          if (data && data[0]?.syncedLyrics) finalLyrics = data[0].syncedLyrics;
-        }
-      }
-
-      // If we finally got lyrics from any of the 3 attempts, handle them:
-      if (finalLyrics) {
-        const nativeScriptRegex = /[\u0400-\u04FF\u0370-\u03FF\u0900-\u0DFF\u0600-\u06FF\u3000-\u9FFF\uAC00-\uD7AF]/;
-        if (nativeScriptRegex.test(finalLyrics)) {
-          lContent.innerHTML = '<p class="lyric-line" style="opacity: 1; filter: blur(0px);">Searching for Romanized version...</p>';
-          let romRes = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(cleanTitle + ' romanized')}`, { headers });
-          if (romRes.ok) {
-            let romData = await romRes.json();
-            if (romData && romData[0]?.syncedLyrics && !nativeScriptRegex.test(romData[0].syncedLyrics)) {
-              finalLyrics = romData[0].syncedLyrics;
-            }
+    if (finalLyrics) {
+      const nativeScriptRegex = /[\u0400-\u04FF\u0370-\u03FF\u0900-\u0DFF\u0600-\u06FF\u3000-\u9FFF\uAC00-\uD7AF]/;
+      if (nativeScriptRegex.test(finalLyrics)) {
+        lContent.innerHTML = '<p class="lyric-line" style="opacity: 1; filter: blur(0px);">Searching for Romanized version...</p>';
+        let romRes = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(cleanTitle + ' romanized')}`, { headers });
+        if (romRes.ok) {
+          let romData = await romRes.json();
+          if (romData && romData[0]?.syncedLyrics && !nativeScriptRegex.test(romData[0].syncedLyrics)) {
+            finalLyrics = romData[0].syncedLyrics;
           }
         }
-        
-        // Save and Show
-        if (!s.isOnline) {
-          if(!fs.existsSync(lDir)) fs.mkdirSync(lDir);
-          // Write using the raw data so it maps correctly next time
-          fs.writeFileSync(path.join(lDir, s.a + ' - ' + cleanTitle + '.lrc'), finalLyrics);
-        } else {
-          localStorage.setItem('lyric_custom_' + cSongId, finalLyrics);
-        }
-        show(finalLyrics); 
-        
-      } else { 
-        // All 3 attempts failed.
-        localStorage.setItem('apiEmpty_' + cSongId, "true");
-        lContent.innerHTML = '<p class="lyric-line" style="opacity: 1; filter:blur(0)">No synced lyrics found in database.</p>'; 
       }
-
-    } catch(e) { 
-      console.error("Lyric Fetch Error:", e);
-      lContent.innerHTML = `<p class="lyric-line" style="opacity: 1; filter:blur(0); color:#ff4c4c;">App Error: ${e.message}</p>`; 
     }
+    
+    if(finalLyrics) {
+      if (!s.isOnline) {
+        if(!fs.existsSync(lDir)) fs.mkdirSync(lDir);
+        fs.writeFileSync(lPath, finalLyrics);
+      } else {
+        localStorage.setItem('lyric_custom_' + cSongId, finalLyrics);
+      }
+      show(finalLyrics); 
+    } else { 
+      localStorage.setItem('apiEmpty_' + cSongId, "true");
+      lContent.innerHTML = '<p class="lyric-line" style="opacity: 1; filter:blur(0)">No synced lyrics found in database.</p>'; 
+    }
+
+  } catch(e) { 
+    console.error("Lyric Fetch Error:", e);
+    lContent.innerHTML = `<p class="lyric-line" style="opacity: 1; filter:blur(0); color:#ff4c4c;">App Error: ${e.message}</p>`; 
   }
+}
 
     function show(lrc) {
       lContent.innerHTML = '';
@@ -1036,6 +1000,10 @@ function toggleLyrics() {
       
       lyricScrollTimeout = setTimeout(() => {
         isUserScrolling = false;
+        
+        // FIX: If the song is paused, do NOT auto-snap back! Let the user read.
+        if (audio.paused) return; 
+
         const ps = document.getElementsByClassName('lyric-line');
         const lView = document.getElementById('l-view');
         if (lView && typeof lyrIdx !== 'undefined' && lyrIdx >= 0 && ps[lyrIdx]) {
@@ -1044,13 +1012,10 @@ function toggleLyrics() {
       }, 2000);
     }
 
-    // Listen for mouse wheels, trackpad swipes, and scrollbar clicks
-    const lViewElement = document.getElementById('l-view');
-    if (lViewElement) {
-      lViewElement.addEventListener('wheel', handleManualScroll);
-      lViewElement.addEventListener('touchmove', handleManualScroll);
-      lViewElement.addEventListener('mousedown', handleManualScroll);
-    }
+
+    lView.addEventListener('wheel', handleManualScroll);
+    lView.addEventListener('touchmove', handleManualScroll);
+    lView.addEventListener('mousedown', handleManualScroll);
 
     audio.ontimeupdate = () => {
       if(!audio.duration) return;
