@@ -9,9 +9,16 @@
     "build": "electron-builder"
   },
   "build": {
-    "appId": "com.promediaplayer.app",
+    "appId": "com.massmediaplayer.app",
+    "mac": {
+    "target": ["dmg"],
+    "gatekeeperAssess": false,
+    "hardenedRuntime": false,
+    "identity": null
+  },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "icon.ico"
     },
     "fileAssociations": [
       {
@@ -25,8 +32,10 @@
     "electron-builder": "^24.0.0"
   },
   "dependencies": {
+    "@distube/ytdl-core": "^4.16.12",
     "@xenova/transformers": "^2.17.2",
     "ffmpeg-static": "^5.3.0",
-    "whisper-node": "^1.1.1"
+    "whisper-node": "^1.1.1",
+    "ytmusic-api": "^5.3.1"
   }
 }
